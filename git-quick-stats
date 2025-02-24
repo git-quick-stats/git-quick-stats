@@ -634,7 +634,7 @@ function jsonOutput() {
 "$propTag"'  commit_notes%n%N%n'"$propTag"',%n  "author": {%n'\
 "$propTag"'    name%n%aN%n'"$propTag"',%n'\
 "$propTag"'    email%n%aE%n'"$propTag"',%n'\
-'    "date": "%aD"%n  },%n  "commiter": {%n'\
+'    "date": "%aD"%n  },%n  "committer": {%n'\
 "$propTag"'    name%n%cN%n'"$propTag"',%n'\
 "$propTag"'    email%n%cE%n'"$propTag"',%n'\
 '    "date": "%cD"%n  }%n},' \
