@@ -715,10 +715,10 @@ function commitsPerAuthor()  {
     optionPicked "Git commits per author:"
     local authorCommits=$(git -c log.showSignature=false log --use-mailmap \
                           $_merges "$_since" "$_until" $_log_options \
-                          | grep -i Author: | cut -c9-)
+                          | grep -i '^Author:' | cut -c9-)
     local coAuthorCommits=$(git -c log.showSignature=false log --use-mailmap \
                             $_merges "$_since" "$_until" $_log_options \
-                            | grep -i Co-Authored-by: | cut -c21-)
+                            | grep -i '^    Co-Authored-by:' | cut -c21-)
 
     if [[ -z "${coAuthorCommits}" ]]; then
         allCommits="${authorCommits}"
