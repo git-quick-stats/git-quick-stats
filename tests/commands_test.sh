@@ -95,7 +95,9 @@ ADDITIONAL USAGE
     You can set _MENU_THEME to display the legacy color scheme
         ex: export _MENU_THEME=legacy
     You can set _GIT_BRANCH to set the branch of the stats
-        ex: export _GIT_BRANCH=master"
+        ex: export _GIT_BRANCH=master
+    You can set _GIT_IGNORE_AUTHORS to filter out specific authors
+        ex: export _GIT_IGNORE_AUTHORS=\"(author1|author2)\""
 
 assert_raises "$src fail" 1
 
