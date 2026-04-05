@@ -28,6 +28,15 @@ COLOR_DARKEST_RED=$(tput setaf 52)
 COLOR_GRAY=$(tput setaf 240)
 COLOR_RESET=$(tput sgr0)
 
+# Detect GNU date command (may be 'gdate' on FreeBSD/macOS with coreutils)
+if date --version >/dev/null 2>&1; then
+    _DATE_CMD="date"
+elif gdate --version >/dev/null 2>&1; then
+    _DATE_CMD="gdate"
+else
+    _DATE_CMD="date"
+fi
+
 # Beginning git log date. Respects all git datetime formats
 # If $_GIT_SINCE is never set, look at the repository to find the first date.
 # NOTE: previously this put the date at the fixed GIT epoch (May 2005)
@@ -45,7 +54,7 @@ _until=${_GIT_UNTIL:-}
 if [[ -n "${_until}" ]]; then
     _until="--until=$_until"
 else
-    _until="--until=$(LC_TIME=C date '+%a, %d %b %Y %H:%M:%S %Z')"
+    _until="--until=$(LC_TIME=C $_DATE_CMD '+%a, %d %b %Y %H:%M:%S %Z')"
 fi
 
 # Set files or directories to be excluded in stats
@@ -128,13 +137,13 @@ function commitsCalendarByAuthor() {
     # Gather commit counts
     git -c log.showSignature=false log --use-mailmap $_merges \
         --date=iso --author="$author" "$_since" "$_until" $_log_options \
-        --pretty='%ad' $_pathspec | awk '
+        --pretty='%ad' $_pathspec | awk -v date_cmd="$_DATE_CMD" '
         {
             split($0, a, " "); 
             # a[1] = YYYY-MM-DD
             split(a[1], date_fields, "-"); 
             mon = date_fields[2] + 0;
-            cmd = "date -d \"" a[1] "\" +%u";
+            cmd = date_cmd " -d \"" a[1] "\" +%u";
             cmd | getline weekday;
             close(cmd); 
             # weekday: 1=Mon, ..., 7=Sun
@@ -204,14 +213,14 @@ function commitsHeatmap() {
 
     local i
     for i in $(seq $((_commit_days-1)) -1 0); do
-        local day=$(date -d "-$i days" +"%Y-%m-%d")
-        if [[ $(date -d "$day" +%u) -gt 5 ]]; then
+        local day=$($_DATE_CMD -d "-$i days" +"%Y-%m-%d")
+        if [[ $($_DATE_CMD -d "$day" +%u) -gt 5 ]]; then
             echo -en "${COLOR_GRAY}"
         else
             echo -en "${COLOR_RESET}"
         fi
 
-        local dayName=$(date -d "$day" +%a)
+        local dayName=$($_DATE_CMD -d "$day" +%a)
         printf "%s | %s |" "$dayName" "$day"
 
         declare -a commits_per_hour
@@ -264,7 +273,7 @@ function commitsHeatmap() {
 ################################################################################
 function checkUtils() {
     readonly MSG="not found. Please make sure this is installed and in PATH."
-    readonly UTILS="awk basename cat column date echo git grep head printf seq \
+    readonly UTILS="awk basename cat column echo git grep head printf seq \
                     sort tput tr uniq"
 
     for u in $UTILS
@@ -274,16 +283,13 @@ function checkUtils() {
 
     # NOTE: The --version flag is only available in GNU date which is required
     # for how the current date/time strings are used in this shell script.
-    # To fully support the legacy BSD date found in a default install within
-    # macOS and older distributions of Linux and Unix, a handful of helper
-    # functions can probably be created to handle every case of incompatibility
-    # between the two. Until that's implemented, it is probably best to warn
-    # the user that this will not work rather than having it silently bomb out
-    # during runtime.
-    if ! date --version >/dev/null 2>&1; then
+    # On FreeBSD and macOS the system date is BSD date; GNU date may be
+    # installed as 'gdate' via coreutils. _DATE_CMD is auto-detected above.
+    if ! "$_DATE_CMD" --version >/dev/null 2>&1; then
         echo "ERROR: GNU date is required."
-        echo "If you're on macOS, please install it using 'brew install coreutils'."
-        echo "Ensure that your PATH is configured to use GNU date as well."
+        echo "On macOS, install it with: brew install coreutils"
+        echo "On FreeBSD, install it with: pkg install coreutils (provides gdate)"
+        echo "Ensure that GNU date (or gdate) is in your PATH."
         echo "See the README.md for further details."
         exit 1
     fi
@@ -680,7 +686,7 @@ function changelogs() {
     local _author=""
     local commits=""
     local author="${1:-}"
-    local next=$(date +%F)
+    local next=$($_DATE_CMD +%F)
 
     if [[ -z "${author}" ]]; then
         optionPicked "Git changelogs:"
@@ -979,7 +985,7 @@ function newContributors() {
         local firstCommit=$(git -c log.showSignature=false log --author="$c" \
                          --reverse --use-mailmap $_merges "$_since" "$_until" \
                          --format='%at' $_log_options $_pathspec | filter_ignored_authors | head -n 1)
-        if [[ $firstCommit -ge $(date -d "$newDate" +%s) ]]; then
+        if [[ $firstCommit -ge $($_DATE_CMD -d "$newDate" +%s) ]]; then
            echo "$c"
         fi
     done
@@ -1044,7 +1050,7 @@ function parse_year() {
     # Handle the raw UNIX timestamp format i.e. 1697375696 +0000
     if [[ "$date_str" =~ ^[0-9]+(\ [+-][0-9]{4})?$ ]]; then
         timestamp=$(echo "$date_str" | awk '{print $1}')
-        year=$(date -d "@$timestamp" '+%Y' 2>/dev/null)
+        year=$($_DATE_CMD -d "@$timestamp" '+%Y' 2>/dev/null)
     else
         # Default case can get funky. We need to create a clever regex to
         # handle the default case which is like Mon Oct 15 12:34:56 2023 +0000
@@ -1065,7 +1071,7 @@ function parse_year() {
             date_str=$(echo "$date_str" | awk -F'/' '{print $2"/"$1"/"$3}')
         fi
         # Extract the final date
-        year=$(date -d "$date_str" '+%Y' 2>/dev/null)
+        year=$($_DATE_CMD -d "$date_str" '+%Y' 2>/dev/null)
     fi
 
     echo "$year"
@@ -1361,7 +1367,7 @@ if [[ "$#" -eq 1 ]]; then
                 # what people may try. This script doesn't provide any additional
                 # output for a bad date since `date`'s STDERR already contains
                 # useful information.
-                if ! date -d "${newDate}" +%s > /dev/null 2>&1; then
+                if ! $_DATE_CMD -d "${newDate}" +%s > /dev/null 2>&1; then
                    newDate=""
                 fi
             done
@@ -1458,7 +1464,7 @@ if [[ "$#" -eq 0 ]]; then
            11) newDate=""
                while [[ -z "${newDate}" ]]; do
                    read -r -p "Since what date? (e.g. '2023-04-13', '13 April 2023', 'last Thursday') " newDate
-                   if ! date -d "${newDate}" +%s > /dev/null 2>&1; then
+                   if ! $_DATE_CMD -d "${newDate}" +%s > /dev/null 2>&1; then
                       newDate=""
                    fi
                done

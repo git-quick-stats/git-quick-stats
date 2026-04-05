@@ -17,6 +17,24 @@ and files. Extracting this information is not always trivial, mostly because
 of a gadzillion options to a gadzillion git commands.
 This program allows you to see detailed information about a git repository.
 .PP
+.SH PLATFORM NOTES
+.PP
+git-quick-stats requires GNU date support for date parsing options.
+.PP
+On macOS, install GNU coreutils with:
+.PP
+.B brew install coreutils
+.PP
+On FreeBSD, install GNU coreutils with:
+.PP
+.B pkg install coreutils
+.PP
+GNU date may be available as either
+.B date
+or
+.B gdate
+and git-quick-stats auto-detects both.
+.PP
 .SH GENERATE OPTIONS
 .PP
 \fB\-h\fR, \-?, \fB\-\-help\fR
