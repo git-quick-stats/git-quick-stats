@@ -720,19 +720,190 @@ function changelogs() {
 ################################################################################
 function myDailyStats() {
     optionPicked "My daily status:"
-    git diff --shortstat '@{0 day ago}' | sort -nr | tr ',' '\n' | LC_ALL=C awk '
-    { args[NR] = $0; }
-    END {
-      for (i = 1; i <= NR; ++i) {
-        printf "\t%s\n", args[i]
-      }
-    }'
 
-    echo -e "\t" $(git -c log.showSignature=false log --use-mailmap \
-                       --author="$(git config user.name)" $_merges \
-                       --since=$(date "+%Y-%m-%dT00:00:00") \
-                       --until=$(date "+%Y-%m-%dT23:59:59") --reverse $_log_options \
-                       | grep -cE "commit [a-f0-9]{40}") "commits"
+    local my_name="$(git config user.name)"
+    local my_email="$(git config user.email)"
+    local today_start
+    local today_end
+    local yesterday_start
+    local yesterday_end
+    local today_date
+    local yesterday_date
+
+    today_start="$(date "+%Y-%m-%dT00:00:00")"
+    today_end="$(date "+%Y-%m-%dT23:59:59")"
+    yesterday_start="$(date -d "yesterday 00:00:00" "+%Y-%m-%dT%H:%M:%S")"
+    yesterday_end="$(date -d "yesterday 23:59:59" "+%Y-%m-%dT%H:%M:%S")"
+    today_date="$(date "+%Y-%m-%d")"
+    yesterday_date="$(date -d "yesterday" "+%Y-%m-%d")"
+
+    # Current user's totals for today
+    local my_commits_today
+    local my_today_stats
+    local my_files_today
+    local my_insertions_today
+    local my_deletions_today
+
+    my_commits_today=$(git rev-list --count --author="$my_name" $_merges \
+        --since="$today_start" --until="$today_end" HEAD)
+
+    my_today_stats=$(git -c log.showSignature=false log --use-mailmap $_merges \
+        --author="$my_name" --numstat --format='' \
+        --since="$today_start" --until="$today_end" $_log_options $_pathspec \
+        | LC_ALL=C awk -F'\t' '
+            $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+                ins += $1;
+                del += $2;
+                files[$3] = 1;
+            }
+            END {
+                for (f in files) {
+                    file_count++;
+                }
+                printf "%d|%d|%d", file_count + 0, ins + 0, del + 0;
+            }
+        ')
+
+    my_files_today=$(echo "$my_today_stats" | awk -F'|' '{print $1}')
+    my_insertions_today=$(echo "$my_today_stats" | awk -F'|' '{print $2}')
+    my_deletions_today=$(echo "$my_today_stats" | awk -F'|' '{print $3}')
+
+    echo -e "\tfor ${my_name} (${today_date}):"
+    echo -e "\t  commits:        ${my_commits_today}"
+    echo -e "\t  files modified: ${my_files_today}"
+    echo -e "\t  insertions:     ${my_insertions_today}"
+    echo -e "\t  deletions:      ${my_deletions_today}"
+
+    # Compare repository totals between yesterday and today
+    local today_stats
+    local yday_stats
+    local today_commits
+    local today_files
+    local today_insertions
+    local today_deletions
+    local yday_commits
+    local yday_files
+    local yday_insertions
+    local yday_deletions
+
+    today_stats=$(git -c log.showSignature=false log --use-mailmap $_merges \
+        --numstat --format='%H' --since="$today_start" --until="$today_end" \
+        $_log_options $_pathspec | LC_ALL=C awk -F'\t' '
+            /^[0-9a-f]{40}$/ { commits++; next }
+            $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+                ins += $1;
+                del += $2;
+                files[$3] = 1;
+            }
+            END {
+                for (f in files) {
+                    file_count++;
+                }
+                printf "%d|%d|%d|%d", commits + 0, file_count + 0, ins + 0, del + 0;
+            }
+        ')
+
+    yday_stats=$(git -c log.showSignature=false log --use-mailmap $_merges \
+        --numstat --format='%H' --since="$yesterday_start" --until="$yesterday_end" \
+        $_log_options $_pathspec | LC_ALL=C awk -F'\t' '
+            /^[0-9a-f]{40}$/ { commits++; next }
+            $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+                ins += $1;
+                del += $2;
+                files[$3] = 1;
+            }
+            END {
+                for (f in files) {
+                    file_count++;
+                }
+                printf "%d|%d|%d|%d", commits + 0, file_count + 0, ins + 0, del + 0;
+            }
+        ')
+
+    today_commits=$(echo "$today_stats" | awk -F'|' '{print $1}')
+    today_files=$(echo "$today_stats" | awk -F'|' '{print $2}')
+    today_insertions=$(echo "$today_stats" | awk -F'|' '{print $3}')
+    today_deletions=$(echo "$today_stats" | awk -F'|' '{print $4}')
+
+    yday_commits=$(echo "$yday_stats" | awk -F'|' '{print $1}')
+    yday_files=$(echo "$yday_stats" | awk -F'|' '{print $2}')
+    yday_insertions=$(echo "$yday_stats" | awk -F'|' '{print $3}')
+    yday_deletions=$(echo "$yday_stats" | awk -F'|' '{print $4}')
+
+    echo -e "\n\trepo comparison (${yesterday_date} -> ${today_date}):"
+    echo -e "\t  commits:        ${yday_commits} -> ${today_commits} (delta: $((today_commits - yday_commits)))"
+    echo -e "\t  files modified: ${yday_files} -> ${today_files} (delta: $((today_files - yday_files)))"
+    echo -e "\t  insertions:     ${yday_insertions} -> ${today_insertions} (delta: $((today_insertions - yday_insertions)))"
+    echo -e "\t  deletions:      ${yday_deletions} -> ${today_deletions} (delta: $((today_deletions - yday_deletions)))"
+
+    # Most changed files today (all authors)
+    echo -e "\n\tmost changed files today:"
+    local top_changed_files
+    top_changed_files=$(git -c log.showSignature=false log --use-mailmap $_merges \
+        --numstat --format='' --since="$today_start" --until="$today_end" \
+        $_log_options $_pathspec | LC_ALL=C awk -F'\t' '
+            $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {
+                files[$3] += ($1 + $2);
+                ins[$3] += $1;
+                del[$3] += $2;
+            }
+            END {
+                for (f in files) {
+                    printf "%d\t%d\t%d\t%s\n", files[f], ins[f], del[f], f;
+                }
+            }
+        ' | sort -nr | head -n 5)
+
+    if [[ -n "$top_changed_files" ]]; then
+        echo "$top_changed_files" | LC_ALL=C awk -F'\t' '{
+            printf "\t  %s (total: %d, +%d, -%d)\n", $4, $1, $2, $3;
+        }'
+    else
+        echo -e "\t  no changed files found for today"
+    fi
+
+    # First and last commit of today
+    local first_today_commit
+    local last_today_commit
+    first_today_commit=$(git -c log.showSignature=false log --use-mailmap $_merges \
+        --reverse --since="$today_start" --until="$today_end" \
+        --date=iso --format='%ad | %aN | %s' $_log_options $_pathspec | head -n 1)
+    last_today_commit=$(git -c log.showSignature=false log --use-mailmap $_merges \
+        --since="$today_start" --until="$today_end" \
+        --date=iso --format='%ad | %aN | %s' $_log_options $_pathspec | head -n 1)
+
+    echo -e "\n\ttoday commit window:"
+    if [[ -n "$first_today_commit" ]]; then
+        echo -e "\t  first commit: ${first_today_commit}"
+        echo -e "\t  last commit:  ${last_today_commit}"
+    else
+        echo -e "\t  no commits found for today"
+    fi
+
+    # Most active users today (excluding current user)
+    echo -e "\n\tmost active users today (excluding you):"
+    local active_users
+    active_users=$(git -c log.showSignature=false log --use-mailmap $_merges \
+        --since="$today_start" --until="$today_end" --format='%aN|%aE' \
+        $_log_options $_pathspec | LC_ALL=C awk -F'|' -v me_name="$my_name" -v me_email="$my_email" '
+            $1 != me_name && $2 != me_email {
+                key = $1 " <" $2 ">";
+                count[key]++;
+            }
+            END {
+                for (k in count) {
+                    printf "%d\t%s\n", count[k], k;
+                }
+            }
+        ' | sort -nr | head -n 5)
+
+    if [[ -n "$active_users" ]]; then
+        echo "$active_users" | LC_ALL=C awk -F'\t' '{
+            printf "\t  %s commits - %s\n", $1, $2;
+        }'
+    else
+        echo -e "\t  no additional active users today"
+    fi
 }
 
 ################################################################################

@@ -121,6 +121,11 @@ assert_success "$src --detailed-git-stats"
 assert_contains "$src --commits-per-day" "Git commits per date"
 assert_success "$src --commits-per-day"
 
+assert_contains "$src --my-daily-stats" "My daily status"
+assert_contains "$src --my-daily-stats" "most changed files today"
+assert_contains "$src --my-daily-stats" "most active users today (excluding you)"
+assert_success "$src --my-daily-stats"
+
 assert_startswith "$src --commits-by-year" "Git commits by year"
 assert_success "$src --commits-by-year"
 
