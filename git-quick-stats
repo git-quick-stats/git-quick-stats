@@ -556,7 +556,8 @@ function detailedGitStats() {
     sort_command="sort ${sort_flags}"
 
     # 1. git log -> awk (extract data) -> sort -> awk (format output with graphs)
-    git -c log.showSignature=false log ${_branch} --use-mailmap $_merges --numstat \
+    # Use --shortstat so merge commits contribute insertion/deletion/file counts.
+    git -c log.showSignature=false log ${_branch} --use-mailmap $_merges --shortstat --cc \
         --pretty="format:commit %H%nAuthor: %aN <%aE>%nDate:   %ad%n%n%w(0,4,4)%B%n" \
         "$_since" "$_until" $_log_options $_pathspec |
     LC_ALL=C awk '
@@ -570,10 +571,31 @@ function detailedGitStats() {
             if (last[author] == "") { last[author] = current_date; }
             first[author] = current_date;
         }
-        /^[0-9]/ {
-            more[author] += $1;
-            less[author] += $2;
-            file[author] += 1;
+        /file changed|files changed/ {
+            files = 0;
+            insertions = 0;
+            deletions = 0;
+
+            split($0, stats, ",");
+            for (i in stats) {
+                value = stats[i];
+                gsub(/^ +| +$/, "", value);
+
+                if (value ~ /file changed|files changed/) {
+                    gsub(/[^0-9]/, "", value);
+                    files = value + 0;
+                } else if (value ~ /insertion/) {
+                    gsub(/[^0-9]/, "", value);
+                    insertions = value + 0;
+                } else if (value ~ /deletion/) {
+                    gsub(/[^0-9]/, "", value);
+                    deletions = value + 0;
+                }
+            }
+
+            more[author] += insertions;
+            less[author] += deletions;
+            file[author] += files;
         }
         END {
             for (author in commits) {
@@ -766,7 +788,7 @@ function csvOutput() {
 
     printf "author,insertions,insertions_per,deletions,deletions_per,files,"
     printf "files_per,commits,commits_per,lines_changed,lines_changed_per\n"
-    git -c log.showSignature=false log ${_branch} --use-mailmap $_merges --numstat \
+    git -c log.showSignature=false log ${_branch} --use-mailmap $_merges --shortstat --cc \
         --pretty="format:commit %H%nAuthor: %aN <%aE>%nDate:   %ad%n%n%w(0,4,4)%B%n" \
         "$_since" "$_until" $_log_options $_pathspec | filter_ignored_authors | LC_ALL=C awk '
         function printStats(author) {
@@ -817,14 +839,34 @@ function csvOutput() {
         if(last[author] == "" ) { last[author] = first[author] }
         }
 
-        /^[0-9]/ {
-        more[author] += $1
-        less[author] += $2
+        /file changed|files changed/ {
+        files = 0
+        insertions = 0
+        deletions = 0
 
-        file[author] += 1
-        more["total"]  += $1
-        less["total"]  += $2
-        file["total"]  += 1
+        split($0, stats, ",")
+        for (i in stats) {
+            value = stats[i]
+            gsub(/^ +| +$/, "", value)
+
+            if (value ~ /file changed|files changed/) {
+                gsub(/[^0-9]/, "", value)
+                files = value + 0
+            } else if (value ~ /insertion/) {
+                gsub(/[^0-9]/, "", value)
+                insertions = value + 0
+            } else if (value ~ /deletion/) {
+                gsub(/[^0-9]/, "", value)
+                deletions = value + 0
+            }
+        }
+
+        more[author] += insertions
+        less[author] += deletions
+        file[author] += files
+        more["total"]  += insertions
+        less["total"]  += deletions
+        file["total"]  += files
         }
 
         END {
