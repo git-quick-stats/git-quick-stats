@@ -354,6 +354,8 @@ LIST OPTIONS
         see a list of everyone who contributed to the repo
     -n, --new-contributors
         list everyone who made their first contribution since a specified date
+    -N, --new-contributors-since-tag
+        list everyone who made their first contribution since a specified tag
     -a, --commits-per-author
         displays a list of commits per author
     -d, --commits-per-day
@@ -464,21 +466,22 @@ function showMenu() {
     printf %b "${NUMS}    9)${TEXT} All branches (sorted by most recent commit)\\n"
     printf %b "${NUMS}   10)${TEXT} All contributors (sorted by name)\\n"
     printf %b "${NUMS}   11)${TEXT} New contributors (sorted by email)\\n"
-    printf %b "${NUMS}   12)${TEXT} Git commits per author\\n"
-    printf %b "${NUMS}   13)${TEXT} Git commits per date\\n"
-    printf %b "${NUMS}   14)${TEXT} Git commits per month\\n"
-    printf %b "${NUMS}   15)${TEXT} Git commits per year\\n"
-    printf %b "${NUMS}   16)${TEXT} Git commits per weekday\\n"
-    printf %b "${NUMS}   17)${TEXT} Git commits per weekday by author\\n"
-    printf %b "${NUMS}   18)${TEXT} Git commits per hour\\n"
-    printf %b "${NUMS}   19)${TEXT} Git commits per hour by author\\n"
-    printf %b "${NUMS}   20)${TEXT} Git commits per timezone\\n"
-    printf %b "${NUMS}   21)${TEXT} Git commits per timezone by author\\n"
+    printf %b "${NUMS}   12)${TEXT} New contributors since a tag\\n"
+    printf %b "${NUMS}   13)${TEXT} Git commits per author\\n"
+    printf %b "${NUMS}   14)${TEXT} Git commits per date\\n"
+    printf %b "${NUMS}   15)${TEXT} Git commits per month\\n"
+    printf %b "${NUMS}   16)${TEXT} Git commits per year\\n"
+    printf %b "${NUMS}   17)${TEXT} Git commits per weekday\\n"
+    printf %b "${NUMS}   18)${TEXT} Git commits per weekday by author\\n"
+    printf %b "${NUMS}   19)${TEXT} Git commits per hour\\n"
+    printf %b "${NUMS}   20)${TEXT} Git commits per hour by author\\n"
+    printf %b "${NUMS}   21)${TEXT} Git commits per timezone\\n"
+    printf %b "${NUMS}   22)${TEXT} Git commits per timezone by author\\n"
     printf %b "\\n${TITLES} Suggest:\\n"
-    printf %b "${NUMS}   22)${TEXT} Code reviewers (based on git history)\\n"
+    printf %b "${NUMS}   23)${TEXT} Code reviewers (based on git history)\\n"
     printf %b "\\n${TITLES} Calendar:\\n"
-    printf %b "${NUMS}   23)${TEXT} Activity calendar by author\\n"
-    printf %b "${NUMS}   24)${TEXT} Activity heatmap for the last $_commit_days days\\n"
+    printf %b "${NUMS}   24)${TEXT} Activity calendar by author\\n"
+    printf %b "${NUMS}   25)${TEXT} Activity heatmap for the last $_commit_days days\\n"
     printf %b "\\n${HELP_TXT}Please enter a menu option or ${EXIT_TXT}press Enter to exit.\\n"
     printf %b "${TEXT}> ${COLOR_NORMAL}"
     read -r opt
@@ -1034,6 +1037,41 @@ function newContributors() {
 }
 
 ################################################################################
+# DESC: Lists all new contributors to a repo since a specified git tag
+# ARGS: $tag (required): Git tag to use as the cutoff
+# OUTS: None
+################################################################################
+function newContributorsSinceTag() {
+    local tag="${1:-}"
+    [[ -z "$tag" ]] && { echo "Usage: newContributorsSinceTag <tag>"; return 1; }
+
+    if ! git rev-parse "$tag" >/dev/null 2>&1; then
+        echo "Error: Tag '$tag' does not exist."
+        return 1
+    fi
+
+    local tagDate=$(git log -n 1 --format='%ai' "$tag" | cut -d' ' -f1)
+    
+    if [[ -z "$tagDate" ]]; then
+        echo "Error: Could not determine date for tag '$tag'."
+        return 1
+    fi
+
+    optionPicked "New contributors since tag '$tag' ($tagDate):"
+    local contributors=$(git -c log.showSignature=false log --use-mailmap $_merges \
+                             "$_since" "$_until" --format='%aE' $_log_options \
+                             $_pathspec | sort -u)
+    for c in $contributors; do
+        local firstCommit=$(git -c log.showSignature=false log --author="$c" \
+                         --reverse --use-mailmap $_merges "$_since" "$_until" \
+                         --format='%at' $_log_options $_pathspec | filter_ignored_authors | head -n 1)
+        if [[ $firstCommit -ge $($_DATE_CMD -d "$tagDate" +%s) ]]; then
+           echo "$c"
+        fi
+    done
+}
+
+################################################################################
 # DESC: Displays the number of commits and percentage contributed to the repo
 #       per author and sorts them by contribution percentage
 # ARGS: None
@@ -1414,6 +1452,16 @@ if [[ "$#" -eq 1 ]]; then
                 fi
             done
             newContributors "${newDate}";;
+        -N|--new-contributors-since-tag)
+            tag="${_GIT_TAG:-}"
+            while [[ -z "${tag}" ]]; do
+                read -r -p "Which tag? " tag
+                if ! git rev-parse "${tag}" >/dev/null 2>&1; then
+                    echo "Error: Tag '${tag}' does not exist."
+                    tag=""
+                fi
+            done
+            newContributorsSinceTag "${tag}";;
         -a|--commits-per-author) commitsPerAuthor;;
         -d|--commits-per-day) commitsPerDay;;
         -Y|--commits-by-year ) commitsByYear;;
@@ -1511,35 +1559,44 @@ if [[ "$#" -eq 0 ]]; then
                    fi
                done
                newContributors "${newDate}"; showMenu;;
-           12) commitsPerAuthor; showMenu;;
-           13) commitsPerDay; showMenu;;
-           14) commitsByMonth; showMenu;;
-           15) commitsByYear; showMenu;;
-           16) commitsByWeekday; showMenu;;
-           17) author=""
+           12) tag=""
+               while [[ -z "${tag}" ]]; do
+                   read -r -p "Which tag? " tag
+                   if ! git rev-parse "${tag}" >/dev/null 2>&1; then
+                       echo "Error: Tag '${tag}' does not exist."
+                       tag=""
+                   fi
+               done
+               newContributorsSinceTag "${tag}"; showMenu;;
+           13) commitsPerAuthor; showMenu;;
+           14) commitsPerDay; showMenu;;
+           15) commitsByMonth; showMenu;;
+           16) commitsByYear; showMenu;;
+           17) commitsByWeekday; showMenu;;
+           18) author=""
                while [[ -z "${author}" ]]; do
                    read -r -p "Which author? " author
                done
                commitsByWeekday "${author}"; showMenu;;
-           18) commitsByHour; showMenu;;
-           19) author=""
+           19) commitsByHour; showMenu;;
+           20) author=""
                while [[ -z "${author}" ]]; do
                    read -r -p "Which author? " author
                done
                commitsByHour "${author}"; showMenu;;
-           20) commitsByTimezone; showMenu;;
-           21) author=""
+           21) commitsByTimezone; showMenu;;
+           22) author=""
                while [[ -z "${author}" ]]; do
                    read -r -p "Which author? " author
                done
                commitsByTimezone "${author}"; showMenu;;
-           22) suggestReviewers; showMenu;;
-           23) author=""
+           23) suggestReviewers; showMenu;;
+           24) author=""
                 while [[ -z "${author}" ]]; do
                     read -r -p "Which author? " author
                 done
                 commitsCalendarByAuthor "${author}"; showMenu;;
-           24) commitsHeatmap; showMenu;;
+           25) commitsHeatmap; showMenu;;
            q|"\n") exit;;
            *) clear; optionPicked "Pick an option from the menu"; showMenu;;
         esac

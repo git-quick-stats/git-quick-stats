@@ -52,6 +52,8 @@ LIST OPTIONS
         see a list of everyone who contributed to the repo
     -n, --new-contributors
         list everyone who made their first contribution since a specified date
+    -N, --new-contributors-since-tag
+        list everyone who made their first contribution since a specified tag
     -a, --commits-per-author
         displays a list of commits per author
     -d, --commits-per-day
