@@ -280,14 +280,15 @@ sudo make reinstall
 
 ### macOS (homebrew)
 
-macOS requires GNU coreutils to be installed and for the non "g" aliased
-versions to be exported to your path. The following is an example of how to
-perform this if you are using Homebrew as your package manager.
+`git-quick-stats` requires GNU `date`. On macOS, install GNU coreutils:
 
 ```bash
 brew install coreutils
 export PATH="$HOMEBREW_PREFIX/opt/coreutils/libexec/gnubin:$PATH"
 ```
+
+The script auto-detects GNU date as either `date` or `gdate`, so exporting
+`gnubin` is optional for this project.
 
 From there, you can install via Homebrew as follows:
 
@@ -297,10 +298,20 @@ brew install git-quick-stats
 
 Or you can follow the UNIX and Linux instructions if you wish.
 
-If you would like to default to using the GNU coreutils (recommended), then you
-can add `export PATH="$HOMEBREW_PREFIX/opt/coreutils/libexec/gnubin:$PATH"` to
-your applicable `~/.bash_profile`, `~/.zprofile`, or other relevant profile
-based on the shell of your choice.
+If you would like to default to using GNU coreutils system-wide, add
+`export PATH="$HOMEBREW_PREFIX/opt/coreutils/libexec/gnubin:$PATH"` to your
+applicable `~/.bash_profile`, `~/.zprofile`, or other relevant profile based
+on the shell of your choice.
+
+### FreeBSD
+
+`git-quick-stats` requires GNU `date`. On FreeBSD, install GNU coreutils:
+
+```bash
+pkg install coreutils
+```
+
+FreeBSD provides GNU date as `gdate`, and the script auto-detects it.
 
 ### Windows
 
@@ -322,6 +333,7 @@ You can use the Docker image provided:
 ## System requirements
 
 - An OS with a Bash shell
+- GNU `date` available as either `date` or `gdate`
 - Tools we use:
 
 ```bash
