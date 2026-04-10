@@ -120,6 +120,8 @@ LIST OPTIONS
         see a list of everyone who contributed to the repo
     -n, --new-contributors
         list everyone who made their first contribution since a specified date
+    -N, --new-contributors-since-tag
+        list everyone who made their first contribution since a specified git tag
     -a, --commits-per-author
         displays a list of commits per author
     -d, --commits-per-day
@@ -171,6 +173,14 @@ You can set variable `_GIT_LIMIT` for limited output. It will affect the "change
 
 ```bash
 export _GIT_LIMIT=20
+```
+
+### Git tag
+
+You can set `_GIT_TAG` to define the default tag used by the "new contributors since tag" option.
+
+```bash
+export _GIT_TAG="foo"
 ```
 
 ### Git log options

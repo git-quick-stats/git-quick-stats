@@ -97,6 +97,11 @@ see a list of everyone who contributed to the repo
 list everyone who made their first contribution since a specified date
 .HP
 .PP
+\fB\-N\fR, \fB\-\-new\-contributors\-since\-tag\fR
+.IP
+list everyone who made their first contribution since a specified git tag
+.HP
+.PP
 \fB\-a\fR, \fB\-\-commits\-per\-author\fR
 .IP
 displays a list of commits per author
@@ -173,6 +178,10 @@ You can set _GIT_SINCE and _GIT_UNTIL to limit the git time log, example:
 You can set _GIT_LIMIT for limited output log, example:
 .PP
 .B  export _GIT_LIMIT=20
+.PP
+You can set _GIT_TAG to define the default tag used by the "new contributors since tag" option, example:
+.PP
+.B  export _GIT_TAG="foo"
 .PP
 You can set _GIT_LOG_OPTIONS for git log options, example:
 .PP
