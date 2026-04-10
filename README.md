@@ -175,6 +175,14 @@ You can set variable `_GIT_LIMIT` for limited output. It will affect the "change
 export _GIT_LIMIT=20
 ```
 
+### Git tag
+
+You can set `_GIT_TAG` to define the default tag used by the "new contributors since tag" option.
+
+```bash
+export _GIT_TAG="foo"
+```
+
 ### Git log options
 
 You can set `_GIT_LOG_OPTIONS` for [git log options](https://git-scm.com/docs/git-log#_options):
