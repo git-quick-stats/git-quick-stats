@@ -17,6 +17,7 @@
 - [**Interactive**](#interactive)
 - [**Non-interactive**](#non-interactive)
 - [**Command-line arguments**](#command-line-arguments)
+- [**Multi-repository mode**](#multi-repository-mode)
 - [**Git log since and until**](#git-log-since-and-until)
 - [**Git log limit**](#git-log-limit)
 - [**Git log options**](#git-log-options)
@@ -155,6 +156,58 @@ SUGGEST OPTIONS
     -h, -?, --help
         display this help text in the terminal
 ```
+
+### Multi-repository mode
+
+`git-quick-stats` supports analyzing multiple repositories in one command.
+
+Use `--repository=/path/to/repo` multiple times:
+
+```bash
+git-quick-stats --repository=/repo1 --repository=/repo2 -T
+```
+
+You can also use `find` + `xargs` to build the repository list:
+
+```bash
+find /path/to/projects -type d -name .git -exec dirname {} \; | \
+    xargs -I{} git-quick-stats --repository={} -a
+```
+
+For multi-repository JSON output, use `--json-path=/path/to/output/dir` with `-j`:
+
+```bash
+git-quick-stats \
+    --repository=/repo1 \
+    --repository=/repo2 \
+    --json-path=/tmp/git-quick-stats \
+    -j
+```
+
+Supported options in multi-repository mode:
+
+- `-T`, `--detailed-git-stats`
+- `-a`, `--commits-per-author`
+- `-V`, `--csv-output-by-branch`
+- `-j`, `--json-output`
+- `-S`, `--my-daily-stats`
+- `-C`, `--contributors`
+- `-n`, `--new-contributors`
+- `-N`, `--new-contributors-since-tag`
+- `-d`, `--commits-per-day`
+- `-Y`, `--commits-by-year`
+- `-m`, `--commits-by-month`
+- `-w`, `--commits-by-weekday`
+- `-W`, `--commits-by-author-by-weekday`
+- `-o`, `--commits-by-hour`
+- `-A`, `--commits-by-author-by-hour`
+- `-z`, `--commits-by-timezone`
+- `-Z`, `--commits-by-author-by-timezone`
+
+Notes:
+
+- For options that support author filtering (`-W`, `-A`, `-Z`), set `_GIT_AUTHOR` to avoid prompts in non-interactive use.
+- For options routed through per-repository execution, output now includes per-repo sections plus an aggregate summary.
 
 ### Git log since and until
 
@@ -380,7 +433,14 @@ _A:_ You can run the dos2unix app in cygwin as follows: `/bin/dos2unix.exe /usr/
 
 _Q:_ How they could be used in a project with many git projects and statistics would show a summary of all git projects?
 
-_A:_ If you want to include submodule logs, you can try using the following: `export _GIT_LOG_OPTIONS="-p --submodule=log"`
+_A:_ Use multi-repository mode with repeated `--repository=/path` flags. Example:
+`git-quick-stats --repository=/repo1 --repository=/repo2 -a`.
+
+You can also combine `find` and `xargs` for large repo trees:
+`find /path/to/projects -type d -name .git -exec dirname {} \; | xargs -I{} git-quick-stats --repository={} -a`.
+
+If you want to include submodule logs in per-repo parsing, you can additionally use:
+`export _GIT_LOG_OPTIONS="-p --submodule=log"`
 (more info about [git log --submodule](https://git-scm.com/docs/git-log#Documentation/git-log.txt---submoduleltformatgt))
 
 ## Contribution

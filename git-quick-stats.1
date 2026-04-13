@@ -170,6 +170,78 @@ show the best people to contact to review code
 .PP
 \fB\-H\fR, \fB\-\-commits\-heatmap\fR shows a heatmap of commits per day per hour for the last 30 days
 .PP
+.SH MULTI-REPOSITORY MODE
+.PP
+Use repeated
+.B --repository=/path/to/repo
+flags to analyze multiple repositories in one invocation.
+.PP
+Example:
+.PP
+.B git-quick-stats --repository=/repo1 --repository=/repo2 -T
+.PP
+You can also compose repository lists with find/xargs:
+.PP
+.B find /path/to/projects -type d -name .git -exec dirname {} \; | xargs -I{} git-quick-stats --repository={} -a
+.PP
+For JSON output in multi-repository mode, use:
+.B --json-path=/path/to/output/dir
+with
+.B -j
+or
+.B --json-output
+.
+.PP
+Example:
+.PP
+.B git-quick-stats --repository=/repo1 --repository=/repo2 --json-path=/tmp/git-quick-stats -j
+.PP
+Supported options in multi-repository mode:
+.PP
+.B -T, --detailed-git-stats
+.br
+.B -a, --commits-per-author
+.br
+.B -V, --csv-output-by-branch
+.br
+.B -j, --json-output
+.br
+.B -S, --my-daily-stats
+.br
+.B -C, --contributors
+.br
+.B -n, --new-contributors
+.br
+.B -N, --new-contributors-since-tag
+.br
+.B -d, --commits-per-day
+.br
+.B -Y, --commits-by-year
+.br
+.B -m, --commits-by-month
+.br
+.B -w, --commits-by-weekday
+.br
+.B -W, --commits-by-author-by-weekday
+.br
+.B -o, --commits-by-hour
+.br
+.B -A, --commits-by-author-by-hour
+.br
+.B -z, --commits-by-timezone
+.br
+.B -Z, --commits-by-author-by-timezone
+.PP
+For author-scoped options
+.B -W
+,
+.B -A
+and
+.B -Z
+, set
+.B _GIT_AUTHOR
+to avoid interactive prompts in non-interactive workflows.
+.PP
 .SH ADDITIONAL USAGE
 You can set _GIT_SINCE and _GIT_UNTIL to limit the git time log, example:
 .PP

@@ -87,6 +87,15 @@ SUGGEST OPTIONS
     -h, -?, --help
         display this help text in the terminal
 
+MULTI-REPOSITORY ANALYSIS
+    --repository=/path
+        Analyze multiple repositories. Can be used multiple times.
+        Supported with: -T (detailed-git-stats), -a (commits-per-author), -V (csv-output-by-branch), -j (json-output), -S (my-daily-stats), -C (contributors), -n (new-contributors), -N (new-contributors-since-tag), -d (commits-per-day), -Y (commits-by-year), -m (commits-by-month), -w (commits-by-weekday), -W (commits-by-author-by-weekday), -o (commits-by-hour), -A (commits-by-author-by-hour), -z (commits-by-timezone), -Z (commits-by-author-by-timezone)
+    --json-path=/path
+        Save path used with multi-repo -j/--json-output. If omitted, you will be prompted.
+        Example: git-quick-stats --repository=/repo1 --repository=/repo2 -T
+        Example: find /path -type d -name .git -exec dirname {} \\; | xargs -I{} git-quick-stats --repository={} -a
+
 ADDITIONAL USAGE
     You can set _GIT_SINCE and _GIT_UNTIL to limit the git time log
         ex: export _GIT_SINCE=\"2017-01-20\"
@@ -129,5 +138,68 @@ assert_success "$src --commits-by-year"
 export LC_TIME=POSIX
 assert_startswith "$src --commits-by-year" "Git commits by year"
 assert_success "$src --commits-by-year"
+
+# Multi-repo tests
+# Setup test repositories for multi-repo analysis
+mkdir -p /tmp/test-repos-test/{repo1,repo2}
+
+# Initialize repo1
+cd /tmp/test-repos-test/repo1 || exit 1
+git init
+git config user.email "author1@example.com"
+git config user.name "Author One"
+echo "file1" > file1.txt
+git add .
+git commit -m "Initial commit in repo1"
+cd - > /dev/null || exit 1
+
+# Initialize repo2
+cd /tmp/test-repos-test/repo2 || exit 1
+git init
+git config user.email "author2@example.com"
+git config user.name "Author Two"
+echo "file2" > file2.txt
+git add .
+git commit -m "Initial commit in repo2"
+cd - > /dev/null || exit 1
+
+# Test multi-repo detailed stats
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -T" "Aggregated contribution stats (by author) across multiple repositories"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -T"
+
+# Test multi-repo commits per author
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -a" "Aggregated git commits per author across multiple repositories"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -a"
+
+# Focused regression tests: newly supported multi-repo options
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -d" "Repository: /tmp/test-repos-test/repo1"
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -d" "Git commits per date"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -d"
+
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -Y" "Repository: /tmp/test-repos-test/repo1"
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -Y" "Git commits by year"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -Y"
+
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 --commits-by-month" "Repository: /tmp/test-repos-test/repo2"
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 --commits-by-month" "Git commits by month"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 --commits-by-month"
+
+export _GIT_AUTHOR="Author One"
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -W" "Git commits by weekday for author"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -W"
+unset _GIT_AUTHOR
+
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -o" "Git commits by hour"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -o"
+
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -z" "Git commits by timezone"
+assert_success "$src --repository=/tmp/test-repos-test/repo1 --repository=/tmp/test-repos-test/repo2 -z"
+
+# Test invalid repository error handling
+assert_raises "$src --repository=/tmp/test-repos-test/repo1 --repository=/invalid-repo -a" 1
+assert_contains "$src --repository=/tmp/test-repos-test/repo1 --repository=/invalid-repo -a" "not a valid git repository"
+
+# Cleanup
+rm -rf /tmp/test-repos-test
 
 assert_end
