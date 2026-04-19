@@ -392,6 +392,15 @@ SUGGEST OPTIONS
     -h, -?, --help
         display this help text in the terminal
 
+MULTI-REPOSITORY ANALYSIS
+    --repository=/path
+        Analyze multiple repositories. Can be used multiple times.
+        Supported with: -T (detailed-git-stats), -a (commits-per-author), -V (csv-output-by-branch), -j (json-output), -S (my-daily-stats), -C (contributors), -n (new-contributors), -N (new-contributors-since-tag), -d (commits-per-day), -Y (commits-by-year), -m (commits-by-month), -w (commits-by-weekday), -W (commits-by-author-by-weekday), -o (commits-by-hour), -A (commits-by-author-by-hour), -z (commits-by-timezone), -Z (commits-by-author-by-timezone)
+    --json-path=/path
+        Save path used with multi-repo -j/--json-output. If omitted, you will be prompted.
+        Example: ${PROGRAM} --repository=/repo1 --repository=/repo2 -T
+        Example: find /path -type d -name .git -exec dirname {} \\; | xargs -I{} ${PROGRAM} --repository={} -a
+
 ADDITIONAL USAGE
     You can set _GIT_SINCE and _GIT_UNTIL to limit the git time log
         ex: export _GIT_SINCE=\"2017-01-20\"
@@ -1524,12 +1533,948 @@ function suggestReviewers() {
 }
 
 ################################################################################
+# FUNCTIONS FOR MULTI-REPO STATS
+
+################################################################################
+# DESC: Validate that all provided repository paths are valid git repositories
+# ARGS: Array of repository paths
+# OUTS: Exit with error if any path is invalid
+################################################################################
+function validateRepositories() {
+    local repo
+    for repo in "${_REPOSITORIES[@]}"; do
+        if [[ ! -d "${repo}/.git" ]] && ! git -C "${repo}" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+            echo "ERROR: '${repo}' is not a valid git repository!"
+            exit 1
+        fi
+    done
+}
+
+################################################################################
+# DESC: Run a stats function in each repository context
+# ARGS: $1 function name, remaining args passed to function
+# OUTS: Combined output grouped by repository
+################################################################################
+function runStatPerRepo() {
+    local stat_function="$1"
+    shift
+    local repo
+
+    for repo in "${_REPOSITORIES[@]}"; do
+        echo "${COLOR_CYANL}Repository: ${repo}${COLOR_NORMAL}"
+        (
+            cd "${repo}" || exit 1
+            "${stat_function}" "$@"
+        )
+        echo ""
+    done
+
+    multiRepoAggregateSummary "${stat_function}" "$@"
+}
+
+################################################################################
+# DESC: Print aggregate summary for multi-repo stat functions
+# ARGS: $1 function name, optional function args
+# OUTS: Aggregated summary across all repositories
+################################################################################
+function multiRepoAggregateSummary() {
+    local stat_function="$1"
+    shift
+    local author="${1:-}"
+    local repo
+
+    echo "${COLOR_BRIGHT_YELLOW}Aggregate summary (all repositories):${COLOR_NORMAL}"
+
+    case "${stat_function}" in
+        commitsPerDay)
+            for repo in "${_REPOSITORIES[@]}"; do
+                git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges \
+                    "$_since" "$_until" --date=short --format='%ad' $_log_options $_pathspec 2>/dev/null
+            done | sort | uniq -c
+            ;;
+
+        commitsByYear)
+            local year startYear endYear __since __until commit_count
+            local since_date="${_since#--since=}"
+            local until_date="${_until#--until=}"
+
+            startYear=$(parse_year "${since_date}")
+            endYear=$(parse_year "${until_date}")
+
+            echo -e "\tyear\tsum"
+            for year in $(seq "${startYear}" "${endYear}"); do
+                if [[ "${year}" = "${startYear}" ]]; then
+                    __since=$_since
+                    __until="--until=${year}-12-31 23:59:59"
+                elif [[ "${year}" = "${endYear}" ]]; then
+                    __since="--since=${year}-01-01 00:00:00"
+                    __until=$_until
+                else
+                    __since="--since=${year}-01-01 00:00:00"
+                    __until="--until=${year}-12-31 23:59:59"
+                fi
+
+                commit_count=0
+                for repo in "${_REPOSITORIES[@]}"; do
+                    commit_count=$((commit_count + $(git -C "${repo}" rev-list --count $_merges \
+                        "${__since}" "${__until}" HEAD $_log_options 2>/dev/null || echo 0)))
+                done
+
+                echo -e "\t${year}\t${commit_count}"
+            done | awk '{
+                count[$1] = $2
+                total += $2
+            }
+            END{
+                for (year in count) {
+                    s="|";
+                    if (total > 0) {
+                        percent = ((count[year] / total) * 100) / 1.25;
+                        for (i = 1; i <= percent; ++i) {
+                            s=s"█"
+                        }
+                    }
+                    printf("\t%s\t%-0s\t%s\n", year, count[year], s);
+                }
+            }' | sort
+            ;;
+
+        commitsByMonth)
+            echo -e "\tmonth\tsum"
+            local m month_count
+            for m in Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec; do
+                month_count=0
+                for repo in "${_REPOSITORIES[@]}"; do
+                    month_count=$((month_count + $(git -C "${repo}" -c log.showSignature=false shortlog -n $_merges --format='%ad %s' \
+                        "$_since" "$_until" $_log_options 2>/dev/null | grep -cE " \\w\\w\\w ${m} [0-9]{1,2} " || true)))
+                done
+                echo -e "\t${m}\t${month_count}"
+            done | awk '{
+                count[$1] = $2
+                total += $2
+            }
+            END{
+                for (month in count) {
+                    s="|";
+                    if (total > 0) {
+                        percent = ((count[month] / total) * 100) / 1.25;
+                        for (i = 1; i <= percent; ++i) {
+                            s=s"█"
+                        }
+                    }
+                    printf("\t%s\t%-0s\t%s\n", month, count[month], s);
+                }
+            }' | LC_TIME="en_EN.UTF-8" sort -M
+            ;;
+
+        commitsByWeekday)
+            echo -e "\tday\tsum"
+            local day weekday_count counter
+            counter=1
+            for day in Mon Tue Wed Thu Fri Sat Sun; do
+                weekday_count=0
+                for repo in "${_REPOSITORIES[@]}"; do
+                    if [[ -z "${author}" ]]; then
+                        weekday_count=$((weekday_count + $(git -C "${repo}" -c log.showSignature=false shortlog -n $_merges --format='%ad %s' \
+                            --author='**' "$_since" "$_until" $_log_options 2>/dev/null | grep -cE "^ * ${day} \\w\\w\\w [0-9]{1,2} " || true)))
+                    else
+                        weekday_count=$((weekday_count + $(git -C "${repo}" -c log.showSignature=false shortlog -n $_merges --format='%ad %s' \
+                            --author="${author}" "$_since" "$_until" $_log_options 2>/dev/null | grep -cE "^ * ${day} \\w\\w\\w [0-9]{1,2} " || true)))
+                    fi
+                done
+                echo -e "\t${counter}\t${day}\t${weekday_count}"
+                counter=$((counter + 1))
+            done | awk '{
+                count[$1" "$2] = $3
+                total += $3
+            }
+            END{
+                for (day in count) {
+                    s="|";
+                    if (total > 0) {
+                        percent = ((count[day] / total) * 100) / 1.25;
+                        for (i = 1; i <= percent; ++i) {
+                            s=s"█"
+                        }
+                    }
+                    printf("\t%s\t%s\t%-0s\t%s\n", substr(day,0,1), substr(day,3,5), count[day], s);
+                }
+            }' | sort -k 1 -n | awk '{$1=""}1' | awk '{$1=$1}1' \
+               | awk '{printf("\t%s\t%s\t%s\n", $1, $2, $3)}'
+            ;;
+
+        commitsByHour)
+            echo -e "\thour\tsum"
+            local h hour_count
+            for h in $(seq -w 0 23); do
+                hour_count=0
+                for repo in "${_REPOSITORIES[@]}"; do
+                    if [[ -z "${author}" ]]; then
+                        hour_count=$((hour_count + $(git -C "${repo}" -c log.showSignature=false shortlog -n $_merges --format='%ad %s' \
+                            --author='**' "$_since" "$_until" $_log_options 2>/dev/null | grep -cE "[0-9] ${h}:[0-9]" || true)))
+                    else
+                        hour_count=$((hour_count + $(git -C "${repo}" -c log.showSignature=false shortlog -n $_merges --format='%ad %s' \
+                            --author="${author}" "$_since" "$_until" $_log_options 2>/dev/null | grep -cE "[0-9] ${h}:[0-9]" || true)))
+                    fi
+                done
+                echo -e "\t${h}\t${hour_count}"
+            done | awk '{
+                count[$1] = $2
+                total += $2
+            }
+            END{
+                for (hour in count) {
+                    s="|";
+                    if (total > 0) {
+                        percent = ((count[hour] / total) * 100) / 1.25;
+                        for (i = 1; i <= percent; ++i) {
+                            s=s"█"
+                        }
+                    }
+                    printf("\t%s\t%-0s\t%s\n", hour, count[hour], s);
+                }
+            }' | sort
+            ;;
+
+        commitsByTimezone)
+            echo -e "Commits\tTimeZone"
+            for repo in "${_REPOSITORIES[@]}"; do
+                if [[ -z "${author}" ]]; then
+                    git -C "${repo}" -c log.showSignature=false log $_merges --format='%ad %s' \
+                        --author='**' "$_since" "$_until" --date=iso $_log_options $_pathspec 2>/dev/null
+                else
+                    git -C "${repo}" -c log.showSignature=false log $_merges --format='%ad %s' \
+                        --author="${author}" "$_since" "$_until" --date=iso $_log_options $_pathspec 2>/dev/null
+                fi
+            done | cut -d " " -f 3 | grep -v -e '^[[:space:]]*$' | sort -n | uniq -c
+            ;;
+
+        *)
+            echo "No aggregate summary is configured for ${stat_function}."
+            ;;
+    esac
+}
+
+################################################################################
+# DESC: Shows the current user's daily stats across multiple repositories
+# ARGS: None
+# OUTS: Per-repo daily stats and aggregated commit total
+################################################################################
+function myDailyStatsMultiRepo() {
+    optionPicked "My daily status across multiple repositories:"
+
+    local repo
+    local total_commits=0
+    local current_user="${_GIT_AUTHOR:-$(git config --global user.name 2>/dev/null || true)}"
+
+    for repo in "${_REPOSITORIES[@]}"; do
+        echo "${COLOR_CYANL}Repository: ${repo}${COLOR_NORMAL}"
+
+        git -C "${repo}" diff --shortstat '@{0 day ago}' | sort -nr | tr ',' '\n' | LC_ALL=C awk '
+        { args[NR] = $0; }
+        END {
+          for (i = 1; i <= NR; ++i) {
+            printf "\t%s\n", args[i]
+          }
+        }'
+
+        local repo_commits
+        repo_commits=$(git -C "${repo}" -c log.showSignature=false log --use-mailmap \
+            --author="${current_user}" $_merges \
+            --since=$(date "+%Y-%m-%dT00:00:00") \
+            --until=$(date "+%Y-%m-%dT23:59:59") --reverse $_log_options \
+            | grep -cE "commit [a-f0-9]{40}" || true)
+
+        echo -e "\t${repo_commits} commits"
+        total_commits=$((total_commits + repo_commits))
+        echo ""
+    done
+
+    echo "${COLOR_BRIGHT_YELLOW}Aggregate summary (all repositories):${COLOR_NORMAL}"
+    echo -e "\t${total_commits} commits"
+    echo ""
+}
+
+################################################################################
+# DESC: Lists all contributors across multiple repositories sorted by name
+# ARGS: None
+# OUTS: Numbered unique contributor list
+################################################################################
+function contributorsMultiRepo() {
+    optionPicked "All contributors across multiple repositories (sorted by name):"
+
+    local repo
+    for repo in "${_REPOSITORIES[@]}"; do
+        git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges "$_since" "$_until" \
+            --format='%aN' $_log_options $_pathspec 2>/dev/null || true
+    done | filter_ignored_authors | sort -u | cat -n
+}
+
+################################################################################
+# DESC: Lists all new contributors across repositories since the specified time
+# ARGS: $newDate (required): Cutoff date for being considered "new"
+# OUTS: Unique contributor emails
+################################################################################
+function newContributorsMultiRepo() {
+    local newDate="${1:-}"
+    [[ -z "${newDate}" ]] && { echo "Usage: newContributorsMultiRepo <date>"; return 1; }
+
+    optionPicked "New contributors across repositories since $newDate:"
+
+    local cutoff
+    cutoff=$($_DATE_CMD -d "$newDate" +%s)
+
+    local repo c first
+    declare -A first_commit
+
+    for repo in "${_REPOSITORIES[@]}"; do
+        local contributors
+        contributors=$(git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges \
+            "$_since" "$_until" --format='%aE' $_log_options $_pathspec 2>/dev/null | sort -u)
+
+        for c in $contributors; do
+            first=$(git -C "${repo}" -c log.showSignature=false log --author="$c" \
+                --reverse --use-mailmap $_merges "$_since" "$_until" \
+                --format='%at' $_log_options $_pathspec 2>/dev/null | head -n 1)
+
+            if [[ -n "${first}" ]]; then
+                if [[ -z "${first_commit[$c]:-}" || "${first}" -lt "${first_commit[$c]}" ]]; then
+                    first_commit[$c]="$first"
+                fi
+            fi
+        done
+    done
+
+    local email
+    for email in $(printf "%s\n" "${!first_commit[@]}" | sort); do
+        if [[ "${first_commit[$email]}" -ge "${cutoff}" ]]; then
+            echo "$email"
+        fi
+    done
+}
+
+################################################################################
+# DESC: Lists all new contributors across repositories since a specified tag
+# ARGS: $tag (required): Git tag to use as the cutoff
+# OUTS: Unique contributor emails
+################################################################################
+function newContributorsSinceTagMultiRepo() {
+    local tag="${1:-}"
+    [[ -z "$tag" ]] && { echo "Usage: newContributorsSinceTagMultiRepo <tag>"; return 1; }
+
+    optionPicked "New contributors across repositories since tag '$tag':"
+
+    local repo c first tagDate cutoff
+    local has_tag=false
+    declare -A new_contributors
+
+    for repo in "${_REPOSITORIES[@]}"; do
+        if ! git -C "${repo}" rev-parse "$tag" >/dev/null 2>&1; then
+            echo "Skipping ${repo}: tag '$tag' does not exist."
+            continue
+        fi
+
+        has_tag=true
+        tagDate=$(git -C "${repo}" log -n 1 --format='%ai' "$tag" | cut -d' ' -f1)
+        cutoff=$($_DATE_CMD -d "$tagDate" +%s)
+
+        local contributors
+        contributors=$(git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges \
+            "$_since" "$_until" --format='%aE' $_log_options $_pathspec 2>/dev/null | sort -u)
+
+        for c in $contributors; do
+            first=$(git -C "${repo}" -c log.showSignature=false log --author="$c" \
+                --reverse --use-mailmap $_merges "$_since" "$_until" \
+                --format='%at' $_log_options $_pathspec 2>/dev/null | head -n 1)
+            if [[ -n "${first}" && "${first}" -ge "${cutoff}" ]]; then
+                new_contributors[$c]=1
+            fi
+        done
+    done
+
+    if [[ "${has_tag}" == false ]]; then
+        echo "Error: Tag '$tag' does not exist in any repository."
+        return 1
+    fi
+
+    printf "%s\n" "${!new_contributors[@]}" | sort
+}
+
+################################################################################
+# DESC: Run commitsPerAuthor on multiple repositories and aggregate results
+# ARGS: None (uses global _REPOSITORIES array)
+# OUTS: Aggregated commits per author across all repos
+################################################################################
+function commitsPerAuthorMultiRepo() {
+    optionPicked "Aggregated git commits per author across multiple repositories:"
+    echo ""
+
+    local repo
+    local allCommits=""
+
+    # Collect commits from all repos
+    for repo in "${_REPOSITORIES[@]}"; do
+        echo "Processing: ${COLOR_CYANL}${repo}${COLOR_NORMAL}"
+
+        # Get author commits from this repo
+        local authorCommits=$(git -C "${repo}" -c log.showSignature=false log --use-mailmap \
+                              $_merges "$_since" "$_until" $_log_options 2>/dev/null \
+                              | grep -i '^Author:' | cut -c9- || true)
+
+        # Get co-author commits from this repo
+        local coAuthorCommits=$(git -C "${repo}" -c log.showSignature=false log --use-mailmap \
+                                $_merges "$_since" "$_until" $_log_options 2>/dev/null \
+                                | grep -i '^    Co-Authored-by:' | cut -c21- || true)
+
+        # Combine commits
+        if [[ -n "${authorCommits}" ]]; then
+            allCommits="${allCommits}${authorCommits}\n"
+        fi
+        if [[ -n "${coAuthorCommits}" ]]; then
+            allCommits="${allCommits}${coAuthorCommits}\n"
+        fi
+    done
+
+    echo ""
+    echo -e "${allCommits}" | awk '
+        NF > 0 {
+            $NF=""; 
+            author[NR] = $0 
+        }
+        END {
+            for(i in author) {
+                if (author[i] != "") {
+                    sum[author[i]]++; 
+                    name[author[i]] = author[i]; 
+                    total++;
+                }
+            }
+            for(i in sum) {
+                printf "%d:%s:%.1f%%\n", sum[i], name[i], (100 * sum[i] / total)
+            }
+        }' | sort -n -r | column -t -s:
+}
+
+################################################################################
+# DESC: Output CSV contribution stats for multiple repositories
+# ARGS: None (uses global _REPOSITORIES array)
+# OUTS: CSV rows with repository field
+################################################################################
+function csvOutputMultiRepo() {
+    local repo
+
+    optionPicked "CSV output (by author) across multiple repositories:"
+    printf "repository,author,insertions,insertions_per,deletions,deletions_per,files,"
+    printf "files_per,commits,commits_per,lines_changed,lines_changed_per\n"
+
+    for repo in "${_REPOSITORIES[@]}"; do
+        git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges --shortstat --cc \
+            --pretty="format:commit %H%nAuthor: %aN <%aE>%nDate:   %ad%n%n%w(0,4,4)%B%n" \
+            "$_since" "$_until" $_log_options $_pathspec | filter_ignored_authors | LC_ALL=C awk -v repo="${repo}" '
+            function printStats(author) {
+                printf "%s,%s,", repo, author
+
+                if (more["total"] > 0) {
+                    printf "%d,%.0f%%,", more[author], (more[author] / more["total"] * 100)
+                } else {
+                    printf "0,0%%,"
+                }
+
+                if (less["total"] > 0) {
+                    printf "%d,%.0f%%,", less[author], (less[author] / less["total"] * 100)
+                } else {
+                    printf "0,0%%,"
+                }
+
+                if (file["total"] > 0) {
+                    printf "%d,%.0f%%,", file[author], (file[author] / file["total"] * 100)
+                } else {
+                    printf "0,0%%,"
+                }
+
+                if (commits["total"] > 0) {
+                    printf "%d,%.0f%%,", commits[author], (commits[author] / commits["total"] * 100)
+                } else {
+                    printf "0,0%%,"
+                }
+
+                total_lines = more[author] + less[author]
+                if ((more["total"] + less["total"]) > 0) {
+                    printf "%d,%.0f%%\n", total_lines, (total_lines / (more["total"] + less["total"]) * 100)
+                } else {
+                    printf "0,0%%\n"
+                }
+            }
+
+            /^Author:/ {
+                $1 = ""
+                author = $0
+                commits[author] += 1
+                commits["total"] += 1
+            }
+
+            /file changed|files changed/ {
+                files = 0
+                insertions = 0
+                deletions = 0
+
+                split($0, stats, ",")
+                for (i in stats) {
+                    value = stats[i]
+                    gsub(/^ +| +$/, "", value)
+
+                    if (value ~ /file changed|files changed/) {
+                        gsub(/[^0-9]/, "", value)
+                        files = value + 0
+                    } else if (value ~ /insertion/) {
+                        gsub(/[^0-9]/, "", value)
+                        insertions = value + 0
+                    } else if (value ~ /deletion/) {
+                        gsub(/[^0-9]/, "", value)
+                        deletions = value + 0
+                    }
+                }
+
+                more[author] += insertions
+                less[author] += deletions
+                file[author] += files
+                more["total"] += insertions
+                less["total"] += deletions
+                file["total"] += files
+            }
+
+            END {
+                for (author in commits) {
+                    if (author != "total") {
+                        printStats(author)
+                    }
+                }
+            }'
+    done
+}
+
+################################################################################
+# DESC: Saves multi-repository git log output in JSON format with repository
+# ARGS: $json_path (required): Path to where the file is saved
+# OUTS: A JSON formatted file
+################################################################################
+function jsonOutputMultiRepo() {
+    local json_path="${1:-}"
+    local repo
+    local repo_json_escaped
+    local propTag="__JSONPROP${RANDOM}__"
+
+    if [[ -z "${json_path}" ]]; then
+        echo "Usage: jsonOutputMultiRepo <json_path>"
+        return 1
+    fi
+
+    optionPicked "Output log saved to file at: ${json_path}/output.json"
+
+    {
+        for repo in "${_REPOSITORIES[@]}"; do
+            repo_json_escaped=$(printf "%s" "${repo}" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+            git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges "$_since" "$_until" $_log_options \
+                --pretty=format:'{%n  "repository": "'"${repo_json_escaped}"'",%n  "commit": "%H",%n  "abbreviated_commit": "%h",%n  "tree": "%T",%n'\
+'  "abbreviated_tree": "%t",%n  "parent": "%P",%n  "abbreviated_parent": "%p",%n  "refs": "%D",%n  "encoding": "%e",%n'\
+"$propTag"'  subject%n%s%n'"$propTag"',%n  "sanitized_subject_line": "%f",%n'\
+"$propTag"'  body%n%b%n'"$propTag"',%n'\
+"$propTag"'  commit_notes%n%N%n'"$propTag"',%n  "author": {%n'\
+"$propTag"'    name%n%aN%n'"$propTag"',%n'\
+"$propTag"'    email%n%aE%n'"$propTag"',%n'\
+'    "date": "%aD"%n  },%n  "committer": {%n'\
+"$propTag"'    name%n%cN%n'"$propTag"',%n'\
+"$propTag"'    email%n%cE%n'"$propTag"',%n'\
+'    "date": "%cD"%n  }%n},'
+        done
+    } | toJsonProp "$propTag" \
+      | sed "$ s/,$//" \
+      | sed ':a;N;$!ba;s/\r\n\([^{]\)/\\n\1/g' \
+      | awk 'BEGIN { print("[") } { print($0) } END { print("]") }' \
+      > "${json_path}/output.json"
+}
+
+################################################################################
+# DESC: Run detailedGitStats on multiple repositories and aggregate results
+# ARGS: None (uses global _REPOSITORIES array)
+# OUTS: Aggregated stats with per-repo breakdown
+################################################################################
+function detailedGitStatsMultiRepo() {
+    local repo
+    local output
+    local author_output
+    local aggregated_author_rows=""
+    local grand_commits=0
+    local grand_insertions=0
+    local grand_deletions=0
+    local grand_lines=0
+    local grand_files=0
+
+    optionPicked "Aggregated contribution stats (by author) across multiple repositories:"
+    echo ""
+
+    # Process each repository and collect stats
+    for repo in "${_REPOSITORIES[@]}"; do
+        echo "${COLOR_CYANL}Repository: ${repo}${COLOR_NORMAL}"
+
+        # Run detailedGitStats logic for this repo
+        git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges --shortstat --cc \
+            --pretty="format:commit %H%nAuthor: %aN <%aE>%nDate:   %ad%n%n%w(0,4,4)%B%n" \
+            "$_since" "$_until" $_log_options $_pathspec 2>/dev/null | \
+        LC_ALL=C awk '
+            /^Author:/ {
+                $1 = ""; author = $0;
+                commits[author] += 1;
+            }
+            /^Date:/ {
+                $1=""; current_date = substr($0, 2);
+                if (last[author] == "") { last[author] = current_date; }
+                first[author] = current_date;
+            }
+            /file changed|files changed/ {
+                files = 0;
+                insertions = 0;
+                deletions = 0;
+
+                split($0, stats, ",");
+                for (i in stats) {
+                    value = stats[i];
+                    gsub(/^ +| +$/, "", value);
+
+                    if (value ~ /file changed|files changed/) {
+                        gsub(/[^0-9]/, "", value);
+                        files = value + 0;
+                    } else if (value ~ /insertion/) {
+                        gsub(/[^0-9]/, "", value);
+                        insertions = value + 0;
+                    } else if (value ~ /deletion/) {
+                        gsub(/[^0-9]/, "", value);
+                        deletions = value + 0;
+                    }
+                }
+
+                more[author] += insertions;
+                less[author] += deletions;
+                file[author] += files;
+            }
+            END {
+                for (author in commits) {
+                    lines_changed = more[author] + less[author];
+                    printf "%s|%d|%d|%d|%d|%d|%s|%s\n",
+                        author, commits[author]+0, more[author]+0, less[author]+0,
+                        lines_changed, file[author]+0, first[author], last[author];
+                }
+            }' | LC_ALL=C awk '
+            BEGIN {
+                FS = "|";
+                total_commits = 0; total_insertions = 0; total_deletions = 0;
+                total_lines = 0; total_files = 0;
+                num_authors = 0;
+            }
+            {
+                authors[num_authors] = $1;
+                commits_arr[num_authors] = $2;
+                insertions_arr[num_authors] = $3;
+                deletions_arr[num_authors] = $4;
+                lines_changed_arr[num_authors] = $5;
+                files_arr[num_authors] = $6;
+                first_commit_arr[num_authors] = $7;
+                last_commit_arr[num_authors] = $8;
+
+                total_commits += $2;
+                total_insertions += $3;
+                total_deletions += $4;
+                total_lines += $5;
+                total_files += $6;
+                num_authors++;
+            }
+            END {
+                for (j = 0; j < num_authors; j++) {
+                    author = authors[j];
+                    current_commits = commits_arr[j];
+                    current_insertions = insertions_arr[j];
+                    current_deletions = deletions_arr[j];
+                    current_lines_changed = lines_changed_arr[j];
+                    current_files = files_arr[j];
+                    current_first_commit = first_commit_arr[j];
+                    current_last_commit = last_commit_arr[j];
+
+                    printf "\t%s:\n", author;
+
+                    if (total_commits > 0) {
+                        commit_percent = (current_commits * 100.0) / total_commits;
+                        printf "\t  commits:       %d (%.1f%%)\n", current_commits, commit_percent;
+                    } else {
+                        printf "\t  commits:       %d\n", current_commits;
+                    }
+
+                    if (total_insertions > 0) {
+                        insert_percent = (current_insertions * 100.0) / total_insertions;
+                        printf "\t  insertions:    %d (%.1f%%)\n", current_insertions, insert_percent;
+                    } else {
+                        printf "\t  insertions:    %d\n", current_insertions;
+                    }
+
+                    if (total_deletions > 0) {
+                        delete_percent = (current_deletions * 100.0) / total_deletions;
+                        printf "\t  deletions:     %d (%.1f%%)\n", current_deletions, delete_percent;
+                    } else {
+                        printf "\t  deletions:     %d\n", current_deletions;
+                    }
+
+                    if (total_lines > 0) {
+                        lines_percent = (current_lines_changed * 100.0) / total_lines;
+                        printf "\t  lines changed: %d (%.1f%%)\n", current_lines_changed, lines_percent;
+                    } else {
+                        printf "\t  lines changed: %d\n", current_lines_changed;
+                    }
+
+                    printf "\t  files:         %d\n", current_files;
+                    printf "\t  first commit:  %s\n", current_first_commit;
+                    printf "\t  last commit:   %s\n\n", current_last_commit;
+                }
+
+                printf "\t%s:\n", " total";
+                printf "\t  commits:       %d\n", total_commits;
+                printf "\t  insertions:    %d\n", total_insertions;
+                printf "\t  deletions:     %d\n", total_deletions;
+                printf "\t  lines changed: %d\n", total_lines;
+                printf "\t  files:         %d\n\n", total_files;
+            }'
+
+        # Track grand totals across all repositories.
+        output=$(git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges --shortstat --cc \
+            --pretty="format:commit %H%nAuthor: %aN <%aE>%nDate:   %ad%n%n%w(0,4,4)%B%n" \
+            "$_since" "$_until" $_log_options $_pathspec 2>/dev/null | LC_ALL=C awk '
+            /^Author:/ {
+                commits += 1;
+            }
+            /file changed|files changed/ {
+                files = 0;
+                insertions = 0;
+                deletions = 0;
+
+                split($0, stats, ",");
+                for (i in stats) {
+                    value = stats[i];
+                    gsub(/^ +| +$/, "", value);
+
+                    if (value ~ /file changed|files changed/) {
+                        gsub(/[^0-9]/, "", value);
+                        files = value + 0;
+                    } else if (value ~ /insertion/) {
+                        gsub(/[^0-9]/, "", value);
+                        insertions = value + 0;
+                    } else if (value ~ /deletion/) {
+                        gsub(/[^0-9]/, "", value);
+                        deletions = value + 0;
+                    }
+                }
+
+                total_insertions += insertions;
+                total_deletions += deletions;
+                total_files += files;
+            }
+            END {
+                total_lines = total_insertions + total_deletions;
+                printf "%d|%d|%d|%d|%d", commits+0, total_insertions+0, total_deletions+0, total_lines+0, total_files+0;
+            }')
+
+        IFS='|' read -r repo_commits repo_insertions repo_deletions repo_lines repo_files <<< "${output}"
+        grand_commits=$((grand_commits + repo_commits))
+        grand_insertions=$((grand_insertions + repo_insertions))
+        grand_deletions=$((grand_deletions + repo_deletions))
+        grand_lines=$((grand_lines + repo_lines))
+        grand_files=$((grand_files + repo_files))
+
+        # Collect per-author rows for cross-repository author summary.
+        author_output=$(git -C "${repo}" -c log.showSignature=false log --use-mailmap $_merges --shortstat --cc \
+            --pretty="format:commit %H%nAuthor: %aN <%aE>%nDate:   %ad%n%n%w(0,4,4)%B%n" \
+            "$_since" "$_until" $_log_options $_pathspec 2>/dev/null | LC_ALL=C awk '
+            /^Author:/ {
+                $1 = ""; author = $0;
+                commits[author] += 1;
+            }
+            /file changed|files changed/ {
+                files = 0;
+                insertions = 0;
+                deletions = 0;
+
+                split($0, stats, ",");
+                for (i in stats) {
+                    value = stats[i];
+                    gsub(/^ +| +$/, "", value);
+
+                    if (value ~ /file changed|files changed/) {
+                        gsub(/[^0-9]/, "", value);
+                        files = value + 0;
+                    } else if (value ~ /insertion/) {
+                        gsub(/[^0-9]/, "", value);
+                        insertions = value + 0;
+                    } else if (value ~ /deletion/) {
+                        gsub(/[^0-9]/, "", value);
+                        deletions = value + 0;
+                    }
+                }
+
+                more[author] += insertions;
+                less[author] += deletions;
+                file[author] += files;
+            }
+            END {
+                for (author in commits) {
+                    lines_changed = more[author] + less[author];
+                    printf "%s|%d|%d|%d|%d|%d\n",
+                        author, commits[author]+0, more[author]+0, less[author]+0,
+                        lines_changed, file[author]+0;
+                }
+            }')
+
+        if [[ -n "${author_output}" ]]; then
+            aggregated_author_rows+="${author_output}"
+            aggregated_author_rows+=$'\n'
+        fi
+
+        echo ""
+    done
+
+    echo ""
+    printf "%s:\n" "${COLOR_BRIGHT_YELLOW}aggregated total (all repositories)${COLOR_NORMAL}"
+    printf "\t  commits:       %d\n" "${grand_commits}"
+    printf "\t  insertions:    %d\n" "${grand_insertions}"
+    printf "\t  deletions:     %d\n" "${grand_deletions}"
+    printf "\t  lines changed: %d\n" "${grand_lines}"
+    printf "\t  files:         %d\n" "${grand_files}"
+    echo ""
+
+    printf "%s:\n" "${COLOR_BRIGHT_YELLOW}summary by author (all repositories)${COLOR_NORMAL}"
+    if [[ -n "${aggregated_author_rows}" ]]; then
+        echo "${aggregated_author_rows}" | LC_ALL=C awk -F'|' '
+            NF >= 6 {
+                commits[$1] += $2;
+                insertions[$1] += $3;
+                deletions[$1] += $4;
+                lines[$1] += $5;
+                files[$1] += $6;
+                total_commits += $2;
+            }
+            END {
+                for (author in commits) {
+                    percent = 0;
+                    if (total_commits > 0) {
+                        percent = (commits[author] * 100.0) / total_commits;
+                    }
+                    printf "%s|%d|%d|%d|%d|%d|%.1f\n",
+                        author, commits[author], insertions[author], deletions[author],
+                        lines[author], files[author], percent;
+                }
+            }' | sort -t'|' -k2,2nr | LC_ALL=C awk -F'|' -v c_cyan="${COLOR_CYANL}" -v c_norm="${COLOR_NORMAL}" '
+            {
+                printf "\t%s%s:%s\n", c_cyan, $1, c_norm;
+                printf "\t  commits:       %d (%.1f%%)\n", $2, $7;
+                printf "\t  insertions:    %d\n", $3;
+                printf "\t  deletions:     %d\n", $4;
+                printf "\t  lines changed: %d\n", $5;
+                printf "\t  files:         %d\n\n", $6;
+            }'
+    else
+        printf "\t  %sno author data found%s\n\n" "${COLOR_GRAY}" "${COLOR_NORMAL}"
+    fi
+}
+
+################################################################################
 # MAIN
 
 # Check to make sure all utilities required for this script are installed
 checkUtils
 
-# Check if we are currently in a git repo.
+# Parse command-line arguments for --repository flags (multi-repo mode)
+_REPOSITORIES=()
+_STAT_CMD=""
+_JSON_PATH=""
+for arg in "$@"; do
+    if [[ "${arg}" == --repository=* ]]; then
+        repo_path="${arg#--repository=}"
+        _REPOSITORIES+=("${repo_path}")
+    elif [[ "${arg}" == --json-path=* ]]; then
+        _JSON_PATH="${arg#--json-path=}"
+    elif [[ "${arg}" == -* ]]; then
+        _STAT_CMD="${arg}"
+    fi
+done
+
+# If multiple repositories specified, validate them and route to multi-repo mode
+if [[ ${#_REPOSITORIES[@]} -gt 1 ]]; then
+    validateRepositories
+    case "${_STAT_CMD}" in
+        -T|--detailed-git-stats) detailedGitStatsMultiRepo; exit 0;;
+        -a|--commits-per-author) commitsPerAuthorMultiRepo; exit 0;;
+        -V|--csv-output-by-branch) csvOutputMultiRepo; exit 0;;
+        -j|--json-output)
+            if [[ -z "${_JSON_PATH}" ]]; then
+                while [[ -z "${_JSON_PATH}" ]]; do
+                    echo "NOTE: This feature is in beta!"
+                    echo "The file name will be saved as \"output.json\"."
+                    echo "The full path must be provided."
+                    echo "Variables or shorthands such as ~ are not valid."
+                    echo "You do not need the final slash at the end of a directory path."
+                    echo "You must have write permission to the folder you are trying to save this to."
+                    echo -e "Example of a valid path: /home/$(whoami)\n"
+                    read -r -p "Please provide the full path to directory to save JSON file: " _JSON_PATH
+                    if [[ ! -w "${_JSON_PATH}" ]]; then
+                        echo "Invalid path or permission denied to write to given area."
+                        _JSON_PATH=""
+                    fi
+                done
+            fi
+            jsonOutputMultiRepo "${_JSON_PATH}"; exit 0;;
+        -S|--my-daily-stats) myDailyStatsMultiRepo; exit 0;;
+        -C|--contributors) contributorsMultiRepo; exit 0;;
+        -n|--new-contributors)
+            newDate=""
+            while [[ -z "${newDate}" ]]; do
+                read -r -p "Since what date? (e.g. '2023-04-13', '13 April 2023', 'last Thursday') " newDate
+                if ! $_DATE_CMD -d "${newDate}" +%s > /dev/null 2>&1; then
+                   newDate=""
+                fi
+            done
+            newContributorsMultiRepo "${newDate}"; exit 0;;
+        -N|--new-contributors-since-tag)
+            while [[ -z "${_tag}" ]]; do
+                read -r -p "Which tag? " _tag
+            done
+            newContributorsSinceTagMultiRepo "${_tag}"; exit 0;;
+        -d|--commits-per-day) runStatPerRepo commitsPerDay; exit 0;;
+        -Y|--commits-by-year) runStatPerRepo commitsByYear; exit 0;;
+        -m|--commits-by-month) runStatPerRepo commitsByMonth; exit 0;;
+        -w|--commits-by-weekday) runStatPerRepo commitsByWeekday; exit 0;;
+        -W|--commits-by-author-by-weekday)
+            author="${_GIT_AUTHOR:-}"
+            while [[ -z "${author}" ]]; do
+                read -r -p "Which author? " author
+            done
+            runStatPerRepo commitsByWeekday "${author}"; exit 0;;
+        -o|--commits-by-hour) runStatPerRepo commitsByHour; exit 0;;
+        -A|--commits-by-author-by-hour)
+            author="${_GIT_AUTHOR:-}"
+            while [[ -z "${author}" ]]; do
+                read -r -p "Which author? " author
+            done
+            runStatPerRepo commitsByHour "${author}"; exit 0;;
+        -z|--commits-by-timezone) runStatPerRepo commitsByTimezone; exit 0;;
+        -Z|--commits-by-author-by-timezone)
+            author="${_GIT_AUTHOR:-}"
+            while [[ -z "${author}" ]]; do
+                read -r -p "Which author? " author
+            done
+            runStatPerRepo commitsByTimezone "${author}"; exit 0;;
+        "") echo "ERROR: No stat command specified. Use -T, -a, -V, -j, -S, -C, -n, -N, -d, -Y, -m, -w, -W, -o, -A, -z, or -Z with --repository flags"; usage; exit 1;;
+        *) echo "ERROR: Multi-repo mode currently supports: -T/--detailed-git-stats, -a/--commits-per-author, -V/--csv-output-by-branch, -j/--json-output, -S/--my-daily-stats, -C/--contributors, -n/--new-contributors, -N/--new-contributors-since-tag, -d/--commits-per-day, -Y/--commits-by-year, -m/--commits-by-month, -w/--commits-by-weekday, -W/--commits-by-author-by-weekday, -o/--commits-by-hour, -A/--commits-by-author-by-hour, -z/--commits-by-timezone, -Z/--commits-by-author-by-timezone"; exit 1;;
+    esac
+fi
+
+# Check if we are currently in a git repo (for single-repo mode).
 if ! git rev-parse --is-inside-work-tree > /dev/null; then
     echo "ERROR: You need to be inside a git repo to parse stats!"
     usage
